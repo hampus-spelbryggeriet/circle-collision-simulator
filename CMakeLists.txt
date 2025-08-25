@@ -4,7 +4,13 @@ project(CircleCollisionSimulation)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-add_executable(CircleCollisionSimulation main.cpp)
+include_directories(inc)
+add_executable(CircleCollisionSimulation
+  src/collision.cpp
+  src/main.cpp
+  src/params.cpp
+  src/simulation.cpp
+)
 
 target_include_directories(CircleCollisionSimulation PUBLIC raylib/include)
 target_link_directories(CircleCollisionSimulation PUBLIC raylib)
