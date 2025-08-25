@@ -3,19 +3,19 @@
 #include <cstring>
 
 class SimulationParameters {
-public:
-  int width = 800;
-  int height = 450;
-  int spawn_limit = 100;
-  float spawn_rate = 1.0;
-  float min_radius = 5.0f;
-  float max_radius = 10.0f;
-  float simulation_speed = 1.0f;
-  int random_seed = 0;
+  public:
+    int width = 800;
+    int height = 450;
+    int spawn_limit = 100;
+    float spawn_rate = 1.0;
+    float min_radius = 5.0f;
+    float max_radius = 10.0f;
+    float simulation_speed = 1.0f;
+    int random_seed = 0;
 
-  void init_from_args(int argc, const char **argv);
+    void init_from_args(int argc, const char** argv);
 
-private:
-  int parse_int(const char *key, const char *value);
-  float parse_float(const char *key, const char *value);
+  private:
+    int parse_int(const char* key, const char* value);
+    float parse_float(const char* key, const char* value);
 };
