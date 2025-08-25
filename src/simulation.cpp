@@ -13,6 +13,7 @@
 #include "collision.h"
 #include "raylib.h"
 #include "raymath.h"
+#include "simd.h"
 
 #define VECTORIZATION 256
 #define VECTOR_BYTES (VECTORIZATION / 8)
@@ -25,10 +26,6 @@ template<typename T>
 T* new_vector_array(size_t count) {
     count = (count + VECTOR_BYTES - 1) / VECTOR_BYTES * VECTOR_BYTES;
     return new (std::align_val_t(VECTOR_BYTES)) T[count];
-}
-
-static __m256 vector_splat(float x) {
-    return _mm256_set_ps(x, x, x, x, x, x, x, x);
 }
 
 SimulationState::SimulationState(int num_elements, float spawn_rate) {
@@ -145,63 +142,77 @@ void SimulationState::draw(const Vector2& bounds) {
 }
 
 void SimulationState::update_velocities(float delta_time, const Vector2& gravity) {
-    const __m256 increment_x = vector_splat(gravity.x * delta_time);
-    const __m256 increment_y = vector_splat(gravity.y * delta_time);
-    for (int i = 0; i < visible_elements; i += VECTOR_BYTES / sizeof(float)) {
-        float* vxs = (float*)&velocities_x[i];
-        float* vys = (float*)&velocities_y[i];
-        __m256 velocity_x = _mm256_load_ps(vxs);
-        __m256 velocity_y = _mm256_load_ps(vys);
+    // Vectorize constants
+    const __m256 increment_x = vsplat(gravity.x * delta_time);
+    const __m256 increment_y = vsplat(gravity.y * delta_time);
 
-        velocity_x = _mm256_add_ps(velocity_x, increment_x);
-        velocity_y = _mm256_add_ps(velocity_y, increment_y);
+    constexpr int stride = VECTOR_BYTES / sizeof(float);
+    for (int i = 0; i < visible_elements; i += stride) {
+        // Apply gravity to X position
+        __m256 velocity = _mm256_load_ps(&velocities_x[i]);
+        velocity = _mm256_add_ps(velocity, increment_x);
+        _mm256_store_ps(&velocities_x[i], velocity);
 
-        _mm256_store_ps(vxs, velocity_x);
-        _mm256_store_ps(vys, velocity_y);
+        // Apply gravity to Y position
+        velocity = _mm256_load_ps(&velocities_y[i]);
+        velocity = _mm256_add_ps(velocity, increment_y);
+        _mm256_store_ps(&velocities_y[i], velocity);
     }
 }
 
 void SimulationState::update_positions(float delta_time, const Vector2& bounds) {
-    const __m256 dt = vector_splat(delta_time);
-    const __m256 bias = vector_splat(DISTANCE_BIAS);
-    const __m256 bounds_x = vector_splat(bounds.x);
-    const __m256 bounds_y = vector_splat(bounds.y);
-    for (int i = 0; i < visible_elements; i += VECTOR_BYTES / sizeof(float)) {
-        float* pxs = (float*)&positions_x[i];
-        float* pys = (float*)&positions_y[i];
-        __m256 position_x = _mm256_load_ps(pxs);
-        __m256 position_y = _mm256_load_ps(pys);
-        const __m256 velocity_x = _mm256_load_ps((const float*)&velocities_x[i]);
-        const __m256 velocity_y = _mm256_load_ps((const float*)&velocities_y[i]);
+    // Vectorize constants
+    const __m256 dt = vsplat(delta_time);
+    const __m256 bias = vsplat(DISTANCE_BIAS);
+    const __m256 bounds_x = vsplat(bounds.x);
+    const __m256 bounds_y = vsplat(bounds.y);
 
-        position_x = _mm256_fmadd_ps(velocity_x, dt, position_x);
-        position_y = _mm256_fmadd_ps(velocity_y, dt, position_y);
+    constexpr int stride = VECTOR_BYTES / sizeof(float);
+    for (int i = 0; i < visible_elements; i += stride) {
+        // Apply velocity to X position
+        __m256 position = _mm256_load_ps(&positions_x[i]);
+        __m256 velocity = _mm256_load_ps(&velocities_x[i]);
+        position = _mm256_fmadd_ps(velocity, dt, position);
 
-        // Clamp position to bounds
-        const __m256 radius = _mm256_load_ps((const float*)&radii[i]);
-        const __m256 min = _mm256_add_ps(radius, bias);
-        const __m256 max_x = _mm256_sub_ps(bounds_x, min);
-        const __m256 max_y = _mm256_sub_ps(bounds_y, min);
-        position_x = _mm256_max_ps(position_x, min);
-        position_y = _mm256_max_ps(position_y, min);
-        position_x = _mm256_min_ps(position_x, max_x);
-        position_y = _mm256_min_ps(position_y, max_y);
+        // Clamp position to horizontal bounds
+        __m256 min = _mm256_load_ps(&radii[i]);
+        min = _mm256_add_ps(min, bias);
+        __m256 max = _mm256_sub_ps(bounds_x, min);
+        position = _mm256_max_ps(position, min);
+        position = _mm256_min_ps(position, max);
 
-        _mm256_store_ps(pxs, position_x);
-        _mm256_store_ps(pys, position_y);
+        _mm256_store_ps(&positions_x[i], position);
+
+        // Apply velocity to Y position
+        position = _mm256_load_ps(&positions_y[i]);
+        velocity = _mm256_load_ps(&velocities_y[i]);
+        position = _mm256_fmadd_ps(velocity, dt, position);
+
+        // Clamp position to vertical bounds
+        max = _mm256_sub_ps(bounds_y, min);
+        position = _mm256_max_ps(position, min);
+        position = _mm256_min_ps(position, max);
+
+        _mm256_store_ps(&positions_y[i], position);
     }
 }
 
 void SimulationState::collide_circles() {
+    constexpr int stride = VECTOR_BYTES / sizeof(float);
     for (int i = 0; i < visible_elements; i += 1) {
-        for (int j = i + 1; j < visible_elements; j += 1) {
-            const float time_hit = sweep_circle_to_circle(
-                Circle {{positions_x[i], positions_y[i]}, radii[i], {velocities_x[i], velocities_y[i]}},
-                Circle {{positions_x[j], positions_y[j]}, radii[j], {velocities_x[j], velocities_y[j]}}
+        for (int j = i + 1; j < visible_elements; j += stride) {
+            float hit_times[8];
+            sweep_circle_to_circle(
+                Circle {{positions_x[i], positions_y[i]}, {velocities_x[i], velocities_y[i]}, radii[i]},
+                CircleSimd {&positions_x[j], &positions_y[j], &velocities_x[j], &velocities_y[j], &radii[j]},
+                hit_times
             );
 
-            if (time_hit > 0.0f && time_hit < collision_event.time_hit) {
-                collision_event = {time_hit, i, j};
+            for (int k = 0; k < stride && j + k < visible_elements; k += 1) {
+                const float hit_time = hit_times[k];
+                if (hit_time > 0.0f && hit_time < collision_event.time_hit) {
+                    collision_event = {hit_time, i, j + k};
+                }
             }
         }
     }
@@ -226,7 +237,7 @@ void SimulationState::collide_edge(EdgeTarget target, const Vector2& bounds) {
 
     for (int i = 0; i < visible_elements; i += 1) {
         const float time_hit = sweep_circle_to_line(
-            Circle {{positions_x[i], positions_y[i]}, radii[i], {velocities_x[i], velocities_y[i]}},
+            CircleSimd {&positions_x[i], &positions_y[i], &velocities_x[i], &velocities_y[i], &radii[i]},
             line
         );
         if (time_hit > 0.0f && time_hit < collision_event.time_hit) {

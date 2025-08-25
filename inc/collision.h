@@ -9,9 +9,17 @@ struct Line {
 
 struct Circle {
     Vector2 center;
-    float radius;
     Vector2 velocity;
+    float radius;
 };
 
-float sweep_circle_to_circle(const Circle& sweep_circle, const Circle& target_circle);
-float sweep_circle_to_line(const Circle& sweep_circle, const Line& target_line);
+struct CircleSimd {
+    const float* centers_x;
+    const float* centers_y;
+    const float* velocities_x;
+    const float* velocities_y;
+    const float* radii;
+};
+
+void sweep_circle_to_circle(const Circle& sweep_circle, const CircleSimd& target_circle, float* hit_times);
+float sweep_circle_to_line(const CircleSimd& sweep_circle, const Line& target_line);
