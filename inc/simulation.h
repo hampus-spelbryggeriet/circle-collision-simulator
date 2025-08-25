@@ -35,10 +35,8 @@ class SimulationState {
 
     int num_elements;
     int visible_elements = 0;
-    Vector2* positions;
     float* positions_x;
     float* positions_y;
-    Vector2* velocities;
     float* velocities_x;
     float* velocities_y;
     float* radii;

@@ -4,7 +4,7 @@ project(CircleCollisionSimulation)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-add_definitions("-mavx2")
+add_definitions("-mavx2 -mfma")
 
 include_directories(inc)
 add_executable(CircleCollisionSimulation

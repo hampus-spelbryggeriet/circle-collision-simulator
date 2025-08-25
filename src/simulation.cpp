@@ -27,19 +27,16 @@ T* new_vector_array(size_t count) {
     return new (std::align_val_t(VECTOR_BYTES)) T[count];
 }
 
-static __m256 vector_splat_2(float x, float y) {
-    // Vectors store floats in reverse order.
-    return _mm256_set_ps(y, x, y, x, y, x, y, x);
+static __m256 vector_splat(float x) {
+    return _mm256_set_ps(x, x, x, x, x, x, x, x);
 }
 
 SimulationState::SimulationState(int num_elements, float spawn_rate) {
     this->num_elements = num_elements;
     this->spawn_rate = spawn_rate;
     this->spawn_timer = 1.0f / spawn_rate;
-    positions = new_vector_array<Vector2>(num_elements);
     positions_x = new_vector_array<float>(num_elements);
     positions_y = new_vector_array<float>(num_elements);
-    velocities = new_vector_array<Vector2>(num_elements);
     velocities_x = new_vector_array<float>(num_elements);
     velocities_y = new_vector_array<float>(num_elements);
     radii = new_vector_array<float>(num_elements);
@@ -55,21 +52,18 @@ SimulationState::~SimulationState() {
     delete[] radii;
     delete[] velocities_y;
     delete[] velocities_x;
-    delete[] velocities;
     delete[] positions_y;
     delete[] positions_x;
-    delete[] positions;
 }
 
 void SimulationState::init_random(const SimulationParameters& params) {
     for (int i = 0; i < num_elements; i += 1) {
         radii[i] = params.min_radius + (params.max_radius - params.min_radius) * frand();
         masses[i] = PI * radii[i] * radii[i];
-        positions[i] = {
-            radii[i] + (params.width - 2.0f * radii[i]) * frand(),
-            radii[i] + (params.height - 2.0f * radii[i]) * frand()
-        };
-        velocities[i] = Vector2Zeros;
+        positions_x[i] = radii[i] + (params.width - 2.0f * radii[i]) * frand();
+        positions_y[i] = radii[i] + (params.height - 2.0f * radii[i]) * frand();
+        velocities_x[i] = 0.0f;
+        velocities_y[i] = 0.0f;
         colors[i] = {uint8_t(128 + 127 * frand()), uint8_t(128 + 127 * frand()), uint8_t(128 + 127 * frand()), 255};
     }
 }
@@ -102,23 +96,31 @@ void SimulationState::update(float delta_time, const Vector2& gravity, const Vec
             switch ((EdgeTarget)collision_event.target) {
                 case EdgeTarget::Left:
                 case EdgeTarget::Right:
-                    velocities[collision_event.collider].x *= -1.0f;
+                    velocities_x[collision_event.collider] *= -1.0f;
                     break;
                 case EdgeTarget::Top:
                 case EdgeTarget::Bottom:
-                    velocities[collision_event.collider].y *= -1.0f;
+                    velocities_y[collision_event.collider] *= -1.0f;
                     break;
                 default:
-                    const Vector2 relative_velocity =
-                        velocities[collision_event.target] - velocities[collision_event.collider];
-                    const Vector2 offset_hit = positions[collision_event.target] - positions[collision_event.collider];
+                    const Vector2 relative_velocity = {
+                        velocities_x[collision_event.target] - velocities_x[collision_event.collider],
+                        velocities_y[collision_event.target] - velocities_y[collision_event.collider],
+
+                    };
+                    const Vector2 offset_hit = {
+                        positions_x[collision_event.target] - positions_x[collision_event.collider],
+                        positions_y[collision_event.target] - positions_y[collision_event.collider],
+                    };
                     const float distance_hit = Vector2Length(offset_hit);
                     const Vector2 reflect_normal = offset_hit / (distance_hit * distance_hit);
                     const float total_mass = masses[collision_event.collider] + masses[collision_event.target];
                     const float k = 2.0f * Vector2DotProduct(relative_velocity, offset_hit) / total_mass;
 
-                    velocities[collision_event.collider] += reflect_normal * k * masses[collision_event.target];
-                    velocities[collision_event.target] -= reflect_normal * k * masses[collision_event.collider];
+                    velocities_x[collision_event.collider] += reflect_normal.x * k * masses[collision_event.target];
+                    velocities_y[collision_event.collider] += reflect_normal.y * k * masses[collision_event.target];
+                    velocities_x[collision_event.target] -= reflect_normal.x * k * masses[collision_event.collider];
+                    velocities_y[collision_event.target] -= reflect_normal.y * k * masses[collision_event.collider];
                     break;
             }
 
@@ -143,22 +145,50 @@ void SimulationState::draw(const Vector2& bounds) {
 }
 
 void SimulationState::update_velocities(float delta_time, const Vector2& gravity) {
-    const __m256 v_increment = vector_splat_2(gravity.x * delta_time, gravity.y * delta_time);
-    for (int i = 0; i < visible_elements; i += 4) {
-        float* ptr = (float*)&velocities[i];
-        __m256 v_velocity = _mm256_load_ps(ptr);
-        v_velocity = _mm256_add_ps(v_velocity, v_increment);
-        _mm256_store_ps(ptr, v_velocity);
+    const __m256 increment_x = vector_splat(gravity.x * delta_time);
+    const __m256 increment_y = vector_splat(gravity.y * delta_time);
+    for (int i = 0; i < visible_elements; i += VECTOR_BYTES / sizeof(float)) {
+        float* vxs = (float*)&velocities_x[i];
+        float* vys = (float*)&velocities_y[i];
+        __m256 velocity_x = _mm256_load_ps(vxs);
+        __m256 velocity_y = _mm256_load_ps(vys);
+
+        velocity_x = _mm256_add_ps(velocity_x, increment_x);
+        velocity_y = _mm256_add_ps(velocity_y, increment_y);
+
+        _mm256_store_ps(vxs, velocity_x);
+        _mm256_store_ps(vys, velocity_y);
     }
 }
 
 void SimulationState::update_positions(float delta_time, const Vector2& bounds) {
-    for (int i = 0; i < visible_elements; i += 1) {
-        positions[i] += velocities[i] * delta_time;
+    const __m256 dt = vector_splat(delta_time);
+    const __m256 bias = vector_splat(DISTANCE_BIAS);
+    const __m256 bounds_x = vector_splat(bounds.x);
+    const __m256 bounds_y = vector_splat(bounds.y);
+    for (int i = 0; i < visible_elements; i += VECTOR_BYTES / sizeof(float)) {
+        float* pxs = (float*)&positions_x[i];
+        float* pys = (float*)&positions_y[i];
+        __m256 position_x = _mm256_load_ps(pxs);
+        __m256 position_y = _mm256_load_ps(pys);
+        const __m256 velocity_x = _mm256_load_ps((const float*)&velocities_x[i]);
+        const __m256 velocity_y = _mm256_load_ps((const float*)&velocities_y[i]);
 
-        const Vector2 min = Vector2Ones * (radii[i] + DISTANCE_BIAS);
-        const Vector2 max = bounds - min;
-        positions[i] = Vector2Clamp(positions[i], min, max);
+        position_x = _mm256_fmadd_ps(velocity_x, dt, position_x);
+        position_y = _mm256_fmadd_ps(velocity_y, dt, position_y);
+
+        // Clamp position to bounds
+        const __m256 radius = _mm256_load_ps((const float*)&radii[i]);
+        const __m256 min = _mm256_add_ps(radius, bias);
+        const __m256 max_x = _mm256_sub_ps(bounds_x, min);
+        const __m256 max_y = _mm256_sub_ps(bounds_y, min);
+        position_x = _mm256_max_ps(position_x, min);
+        position_y = _mm256_max_ps(position_y, min);
+        position_x = _mm256_min_ps(position_x, max_x);
+        position_y = _mm256_min_ps(position_y, max_y);
+
+        _mm256_store_ps(pxs, position_x);
+        _mm256_store_ps(pys, position_y);
     }
 }
 
@@ -166,8 +196,8 @@ void SimulationState::collide_circles() {
     for (int i = 0; i < visible_elements; i += 1) {
         for (int j = i + 1; j < visible_elements; j += 1) {
             const float time_hit = sweep_circle_to_circle(
-                Circle {positions[i], radii[i], velocities[i]},
-                Circle {positions[j], radii[j], velocities[j]}
+                Circle {{positions_x[i], positions_y[i]}, radii[i], {velocities_x[i], velocities_y[i]}},
+                Circle {{positions_x[j], positions_y[j]}, radii[j], {velocities_x[j], velocities_y[j]}}
             );
 
             if (time_hit > 0.0f && time_hit < collision_event.time_hit) {
@@ -195,7 +225,10 @@ void SimulationState::collide_edge(EdgeTarget target, const Vector2& bounds) {
     }
 
     for (int i = 0; i < visible_elements; i += 1) {
-        const float time_hit = sweep_circle_to_line(Circle {positions[i], radii[i], velocities[i]}, line);
+        const float time_hit = sweep_circle_to_line(
+            Circle {{positions_x[i], positions_y[i]}, radii[i], {velocities_x[i], velocities_y[i]}},
+            line
+        );
         if (time_hit > 0.0f && time_hit < collision_event.time_hit) {
             collision_event = {time_hit, i, (int)target};
         }
@@ -206,6 +239,7 @@ void SimulationState::copy_positions() {
     std::lock_guard<std::mutex> guard(copy_mutex);
 
     for (int i = 0; i < visible_elements; i += 1) {
-        draw_positions[i] = positions[i];
+        draw_positions[i].x = positions_x[i];
+        draw_positions[i].y = positions_y[i];
     }
 }
