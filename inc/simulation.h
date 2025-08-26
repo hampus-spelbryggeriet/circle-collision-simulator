@@ -43,10 +43,10 @@ class SimulationState {
     float* velocities_y;
     float* radii;
     float* masses;
-    std::vector<int> markers;
-    std::list<size_t> active_elements;
-    std::vector<size_t> sweep_elements;
-    std::vector<size_t> target_elements;
+    std::vector<int> markers = {};
+    std::list<size_t> active_elements = {};
+    std::vector<size_t> sweep_elements = {};
+    std::vector<size_t> target_elements = {};
     CollisionEvent collision_event;
 
     Vector2* draw_positions;
@@ -57,15 +57,18 @@ class SimulationState {
 
     std::mutex copy_mutex;
 
+    void update_markers(float delta_time);
+
     void insert_markers(size_t i, float delta_time);
-    void insert_marker(size_t i, float key, float delta_time);
-    void sort_markers(float delta_time);
+    void insert_marker(int marker, float delta_time);
+    void sort_markers(int low, int high, float delta_time);
     size_t calculate_marker_index(int marker);
     float calculate_marker_key(int marker, float delta_time);
 
     void update_velocities(float delta_time, const Vector2& gravity);
     void update_positions(float delta_time, const Vector2& bounds);
-    void collide_circles();
-    void collide_edge(EdgeTarget target, const Vector2& bounds, float delta_time);
+    void sweep_circle_to_circle();
+    void sweep_circle_to_edge(EdgeTarget target, const Vector2& bounds, float delta_time);
+
     void copy_positions();
 };

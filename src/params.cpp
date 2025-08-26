@@ -19,7 +19,7 @@ void SimulationParameters::init_from_args(int argc, const char** argv) {
                           << "  -h, --help         Display this help and exit" << std::endl
                           << "  --width            Set the window width" << std::endl
                           << "  --height           Set the window height" << std::endl
-                          << "  --spawn-limit      Set the maximum number of circles"
+                          << "  --spawn-limit      Set the maximum number of circles" << std::endl
                           << "  --spawn-rate       Set the circle spawn rate" << std::endl
                           << "  --min-radius       Set the minimum circle radius" << std::endl
                           << "  --max-radius       Set the maximum circle radius" << std::endl

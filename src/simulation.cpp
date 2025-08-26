@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
-#include <utility>
 
 #include "raylib.h"
 #include "raymath.h"
@@ -23,12 +22,18 @@ struct Line {
     Vector2 direction;
 };
 
-static float frand() {
+inline float frand() {
     return float(std::rand()) / float(RAND_MAX);
 }
 
+inline void swap(int* __restrict__ x, int* __restrict__ y) {
+    int temp = *x;
+    *x = *y;
+    *y = temp;
+}
+
 template<typename T>
-T* new_vector_array(size_t count) {
+inline T* new_vector_array(size_t count) {
     count = (count + VECTOR_BYTES - 1) / VECTOR_BYTES * VECTOR_BYTES;
     return new (std::align_val_t(VECTOR_BYTES)) T[count];
 }
@@ -43,10 +48,6 @@ SimulationState::SimulationState(int num_elements, float spawn_rate) {
     velocities_y = new_vector_array<float>(num_elements);
     radii = new_vector_array<float>(num_elements);
     masses = new_vector_array<float>(num_elements);
-    markers = {};
-    active_elements = {};
-    sweep_elements = {};
-    target_elements = {};
     draw_positions = new Vector2[this->num_elements];
     colors = new Color[this->num_elements];
 }
@@ -77,16 +78,14 @@ void SimulationState::init_random(const SimulationParameters& params) {
 void SimulationState::update(float delta_time, const Vector2& gravity, const Vector2& bounds) {
     float remaining_time = delta_time;
 
-    if (visible_elements < num_elements) {
-        while (spawn_timer < 0.0f) {
-            insert_markers(visible_elements, remaining_time);
-            visible_elements = std::min(visible_elements + 1, num_elements);
-            spawn_timer += 1.0f / spawn_rate;
-        }
+    while (visible_elements < num_elements && spawn_timer < 0.0f) {
+        insert_markers(visible_elements, remaining_time);
+        visible_elements = std::min(visible_elements + 1, num_elements);
+        spawn_timer += 1.0f / spawn_rate;
     }
 
     update_velocities(remaining_time, gravity);
-    sort_markers(remaining_time);
+    update_markers(remaining_time);
 
     while (true) {
         active_elements.clear();
@@ -126,11 +125,11 @@ void SimulationState::update(float delta_time, const Vector2& gravity, const Vec
 
         collision_event.time_hit = remaining_time;
 
-        collide_circles();
-        collide_edge(EdgeTarget::Left, bounds, remaining_time);
-        collide_edge(EdgeTarget::Right, bounds, remaining_time);
-        collide_edge(EdgeTarget::Top, bounds, remaining_time);
-        collide_edge(EdgeTarget::Bottom, bounds, remaining_time);
+        sweep_circle_to_circle();
+        sweep_circle_to_edge(EdgeTarget::Left, bounds, remaining_time);
+        sweep_circle_to_edge(EdgeTarget::Right, bounds, remaining_time);
+        sweep_circle_to_edge(EdgeTarget::Top, bounds, remaining_time);
+        sweep_circle_to_edge(EdgeTarget::Bottom, bounds, remaining_time);
 
         const bool did_collide = collision_event.time_hit < remaining_time;
         if (did_collide) {
@@ -168,10 +167,9 @@ void SimulationState::update(float delta_time, const Vector2& gravity, const Vec
             }
 
             remaining_time -= collision_event.time_hit;
-            sort_markers(remaining_time);
+            update_markers(remaining_time);
         } else {
             update_positions(remaining_time, bounds);
-            sort_markers(remaining_time);
             break;
         }
     }
@@ -189,14 +187,20 @@ void SimulationState::draw(const Vector2& bounds) {
     }
 }
 
-void SimulationState::insert_markers(size_t i, float delta_time) {
-    insert_marker(-(i + 1), positions_y[i] - radii[i], delta_time);
-    insert_marker(i + 1, positions_y[i] + radii[i], delta_time);
+void SimulationState::update_markers(float delta_time) {
+    sort_markers(0, markers.size() - 1, delta_time);
 }
 
-void SimulationState::insert_marker(size_t marker, float key, float delta_time) {
+void SimulationState::insert_markers(size_t i, float delta_time) {
+    insert_marker(-(i + 1), delta_time);
+    insert_marker(i + 1, delta_time);
+}
+
+void SimulationState::insert_marker(int marker, float delta_time) {
+    const float marker_key = calculate_marker_key(marker, delta_time);
+
     for (std::vector<int>::const_iterator it = markers.cbegin(); it != markers.cend(); ++it) {
-        if (key >= calculate_marker_key(*it, delta_time)) {
+        if (marker_key >= calculate_marker_key(*it, delta_time)) {
             continue;
         }
         markers.insert(it, marker);
@@ -206,21 +210,24 @@ void SimulationState::insert_marker(size_t marker, float key, float delta_time) 
     markers.push_back(marker);
 }
 
-void SimulationState::sort_markers(float delta_time) {
-    for (size_t i = 1; i < markers.size(); i += 1) {
-        const float key_i = calculate_marker_key(markers[i], delta_time);
-        for (size_t j = 0; j < i; j += 1) {
-            if (key_i >= calculate_marker_key(markers[j], delta_time)) {
-                continue;
+void SimulationState::sort_markers(int low, int high, float delta_time) {
+    if (low < high) {
+        swap(&markers[(low + high) / 2], &markers[high]);
+
+        const float pivot = calculate_marker_key(markers[high], delta_time);
+
+        int p = low;
+        for (int i = low; i < high; i += 1) {
+            if (calculate_marker_key(markers[i], delta_time) <= pivot) {
+                swap(&markers[p], &markers[i]);
+                p += 1;
             }
-
-            // Swap
-            markers[i] = markers[i] ^ markers[j];
-            markers[j] = markers[i] ^ markers[j];
-            markers[i] = markers[i] ^ markers[j];
-
-            break;
         }
+
+        swap(&markers[p], &markers[high]);
+
+        sort_markers(low, p - 1, delta_time);
+        sort_markers(p + 1, high, delta_time);
     }
 }
 
@@ -294,7 +301,7 @@ void SimulationState::update_positions(float delta_time, const Vector2& bounds) 
     }
 }
 
-void SimulationState::collide_circles() {
+void SimulationState::sweep_circle_to_circle() {
     constexpr int stride = VECTOR_BYTES / sizeof(float);
     for (int i = 0; i < sweep_elements.size(); i += stride) {
         // Sweeping a circle towards another circle is equivalent to raycasting from the sweep circle center towards a
@@ -365,7 +372,7 @@ void SimulationState::collide_circles() {
     }
 }
 
-void SimulationState::collide_edge(EdgeTarget target, const Vector2& bounds, float delta_time) {
+void SimulationState::sweep_circle_to_edge(EdgeTarget target, const Vector2& bounds, float delta_time) {
     Line line;
     switch (target) {
         case EdgeTarget::Left:
