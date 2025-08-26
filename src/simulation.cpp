@@ -246,12 +246,15 @@ float SimulationState::calculate_marker_key(int marker, float delta_time) {
 }
 
 void SimulationState::update_velocities(float delta_time, const Vector2& gravity) {
+    const float increment_scalar_x = gravity.x * delta_time;
+    const float increment_scalar_y = gravity.y * delta_time;
+
     // Vectorize constants
-    const __m256 increment_x = vsplat(gravity.x * delta_time);
-    const __m256 increment_y = vsplat(gravity.y * delta_time);
+    const __m256 increment_x = vsplat(increment_scalar_x);
+    const __m256 increment_y = vsplat(increment_scalar_y);
 
     constexpr int stride = VECTOR_BYTES / sizeof(float);
-    for (int i = 0; i < visible_elements; i += stride) {
+    for (int i = 0; i < visible_elements - (stride - 1); i += stride) {
         // Apply gravity to X position
         __m256 velocity = _mm256_load_ps(&velocities_x[i]);
         velocity = _mm256_add_ps(velocity, increment_x);
@@ -261,6 +264,12 @@ void SimulationState::update_velocities(float delta_time, const Vector2& gravity
         velocity = _mm256_load_ps(&velocities_y[i]);
         velocity = _mm256_add_ps(velocity, increment_y);
         _mm256_store_ps(&velocities_y[i], velocity);
+    }
+
+    // Apply velocty updates to the remaining elements
+    for (int i = visible_elements / stride * stride; i < visible_elements; i += 1) {
+        velocities_x[i] += increment_scalar_x;
+        velocities_y[i] += increment_scalar_y;
     }
 }
 
