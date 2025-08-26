@@ -235,13 +235,20 @@ void SimulationState::collide_edge(EdgeTarget target, const Vector2& bounds) {
             break;
     }
 
-    for (int i = 0; i < visible_elements; i += 1) {
-        const float time_hit = sweep_circle_to_line(
+    constexpr int stride = VECTOR_BYTES / sizeof(float);
+    for (int i = 0; i < visible_elements; i += stride) {
+        float hit_times[8];
+        sweep_circle_to_line(
             CircleSimd {&positions_x[i], &positions_y[i], &velocities_x[i], &velocities_y[i], &radii[i]},
-            line
+            line,
+            hit_times
         );
-        if (time_hit > 0.0f && time_hit < collision_event.time_hit) {
-            collision_event = {time_hit, i, (int)target};
+
+        for (int k = 0; k < stride && i + k < visible_elements; k += 1) {
+            const float hit_time = hit_times[k];
+            if (hit_time > 0.0f && hit_time < collision_event.time_hit) {
+                collision_event = {hit_time, i + k, (int)target};
+            }
         }
     }
 }

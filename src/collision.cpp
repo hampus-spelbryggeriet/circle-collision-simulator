@@ -64,14 +64,44 @@ void sweep_circle_to_circle(const Circle& sweep_circle, const CircleSimd& target
     _mm256_storeu_ps(hit_times, temp);
 }
 
-float sweep_circle_to_line(const CircleSimd& sweep_circle, const Line& target_line) {
-    // Assume circle will always be on the left side of the line direction.
-    const Vector2 normal = {-target_line.direction.y, target_line.direction.x};
+void sweep_circle_to_line(const CircleSimd& sweep_circle, const Line& target_line, float* hit_times) {
+    // Sweeping a circle to a line is equivalent to raycasting to an inflated line with the depth of two times the
+    // circle radius. The calculcations below were derived by solving the following system of equations:
+    //
+    //   sweep_circle.center + hit_time * sweep_circle.velocity = target_line.point + u * target_line.direction
+    //
+    // By solving for hit_time, we get three cross products, that we can compute.
 
-    const float time_hit =
-        (Vector2CrossProduct(target_line.direction, target_line.point + normal * sweep_circle.radii[0])
-         + Vector2CrossProduct({sweep_circle.centers_x[0], sweep_circle.centers_y[0]}, target_line.direction))
-        / Vector2CrossProduct(target_line.direction, {sweep_circle.velocities_x[0], sweep_circle.velocities_y[0]});
+    __m256 line_direction_x = vsplat(target_line.direction.x);
+    __m256 line_direction_y = vsplat(target_line.direction.y);
 
-    return time_hit;
+    // Calculate a point inflated by the circle radius from a normal of the line starting at the line point. Assume
+    // circle will always be on the left side of the line direction.
+    __m256 temp = vsplat(target_line.point.x);
+    __m256 temp2 = _mm256_load_ps(sweep_circle.radii);
+    __m256 temp3 = temp2;
+    temp2 = _mm256_fnmadd_ps(line_direction_y, temp2, temp);
+    temp = vsplat(target_line.point.y);
+    temp3 = _mm256_fmadd_ps(line_direction_x, temp3, temp);
+
+    // Cross product of the line direction and the inflated point
+    temp = vcross(line_direction_x, line_direction_y, temp2, temp3);
+
+    // Cross product of the circle center and the line direction
+    temp2 = _mm256_load_ps(sweep_circle.centers_x);
+    temp3 = _mm256_load_ps(sweep_circle.centers_y);
+    temp2 = vcross(temp2, temp3, line_direction_x, line_direction_y);
+
+    // Add the results together
+    temp = _mm256_add_ps(temp, temp2);
+
+    // Cross product of the line direction and the ray velocity vector
+    temp2 = _mm256_load_ps(sweep_circle.velocities_x);
+    temp3 = _mm256_load_ps(sweep_circle.velocities_y);
+    temp2 = vcross(line_direction_x, line_direction_y, temp2, temp3);
+
+    // Divide the previously added cross products with the last cross product to obtain the hit time
+    temp = _mm256_div_ps(temp, temp2);
+
+    _mm256_store_ps(hit_times, temp);
 }

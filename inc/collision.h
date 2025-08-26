@@ -22,4 +22,4 @@ struct CircleSimd {
 };
 
 void sweep_circle_to_circle(const Circle& sweep_circle, const CircleSimd& target_circle, float* hit_times);
-float sweep_circle_to_line(const CircleSimd& sweep_circle, const Line& target_line);
+void sweep_circle_to_line(const CircleSimd& sweep_circle, const Line& target_line, float* hit_times);
