@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+    - '**.md'
+    - '.gitignore'
+    - '.github/**'
+    - '!.github/workflows/cicd.yaml'
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Checkout project
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: main
+
+    - name: Build
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+        name: CircleCollisionSimulator
+        path: build/CircleCollisionSimulator
+
+
