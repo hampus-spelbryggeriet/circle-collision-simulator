@@ -1,4 +1,7 @@
-# How to run
+# Circle Collision Simulation
+Simulates colliding circles using continuous collision detection.
+
+## How to run
 Make sure CMake is installed. Then perform the following steps:
 
 ```
